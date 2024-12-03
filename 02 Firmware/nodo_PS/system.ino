@@ -92,13 +92,12 @@ void configurePage(WiFiClient client, String jsAlert)
 
     client.println("</body>");
     client.println("</html>");
+    client.stop();
 }
 
 // Send evaluation page
 void evaluationPage(WiFiClient client)
 {
-    NodeData nodeData = getNodeData(); // Get current, temperature, and humidity data
-
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: text/html; charset=utf-8");
     client.println("");
@@ -117,9 +116,6 @@ void evaluationPage(WiFiClient client)
     client.println("<h1>Evaluation</h1>");
     client.println("<table>");
     client.println("<tr><th>Parameter</th><th>Value</th></tr>");
-    client.println("<tr><td>Current</td><td>" + String(nodeData.current_mA) + " mA</td></tr>");
-    client.println("<tr><td>Temperature</td><td>" + String(nodeData.temperature) + " °C</td></tr>");
-    client.println("<tr><td>Humidity</td><td>" + String(nodeData.humidity) + " % rH</td></tr>");
     client.println("<tr><td>TP range</td><td>" + String(TPmin) + " - " + String(TPmax) + " dB</td></tr>");
     client.println("<tr><td>SF range</td><td>" + String(SFmin) + " - " + String(SFmax) + "</td></tr>");
     client.println("<tr><td>CR range </td><td>" + String(CRmin) + " - " + String(CRmax) + "</td></tr>");
@@ -131,18 +127,50 @@ void evaluationPage(WiFiClient client)
     client.println("</form>");
     client.println("</body>");
     client.println("</html>");
+    client.stop();
+}
+
+void resultsPage(WiFiClient client)
+{
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/html; charset=utf-8");
+    client.println("");
+    client.println("<!DOCTYPE HTML>");
+    client.println("<html>");
+    client.println("<head>");
+    client.println("<title>Results</title>");
+    client.println("<meta name='viewport' content='width=device-width, initial-scale=1.0'>");
+    client.println("<style>");
+    client.println("body { font-family: Arial, sans-serif; text-align: center; }");
+    client.println(".form-group { display: flex; justify-content: center; align-items: center; margin-top: 10px; }");
+    client.println("select, input[type='submit'] { margin: 5px; padding: 5px; font-size: 16px; }");
+    client.println("</style>");
+    client.println("</head>");
+    client.println("<body>");
+    client.println("<h1>Results</h1>");
+    client.println("<form action='/' method='GET'>");
+    client.println("<h3>Transmission power</h3><p>" + String(TPeval) + " dB</p>");
+    client.println("<h3><td>Spreading factor</h3><p>SF " + String(SFeval) + "</p>");
+    client.println("<h3><td>Coding Rate</h3><p>CR " + String(CReval) + "</p>");
+    client.println("<br>");
+    client.println("<input type='submit' value='Back to START'>");
+    client.println("</form>");
+    client.println("</body>");
+    client.println("</html>");
+    client.stop();
 }
 
 // Function to wait for confirmation
 bool waitForConfirmation()
 {
+    Serial.println("Waiting for confirmation...");
     unsigned long startTime = millis();
     while (millis() - startTime < 5000)
     {
         if (LoRaSerial.available())
         {
             String response = LoRaSerial.readString();
-            if (response.indexOf("CONFIRM") > 0)
+            if (response.indexOf("CONFIRM") != -1)
             {
                 return true;
             }
@@ -150,3 +178,4 @@ bool waitForConfirmation()
     }
     return false;
 }
+

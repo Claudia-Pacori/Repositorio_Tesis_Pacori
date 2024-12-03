@@ -1,5 +1,8 @@
 // Libraries
-#include <WiFi.h> //https://www.arduino.cc/en/Reference/WiFi
+#include <WiFi.h>
+#include <Wire.h>
+#include "Adafruit_SHT4x.h"
+#include "Adafruit_INA219.h"
 
 // Constants
 #define LED 18
@@ -7,13 +10,26 @@
 // Parameters
 String request;
 String receivedMessages = "";
-const char *ssid = "ESP32_Local_Network"; // Nombre de la red local
-String nom = "ESP32";
+const char *ssid = "ESP32_Local_Network";
+
+struct NodeData
+{
+    float current_mA;
+    float temperature;
+    float humidity;
+};
 
 // Objects
 WiFiServer server(80);
 WiFiClient client;
-HardwareSerial LoRaSerial(1); // Definir LoRaSerial con el hardware serial 1
+HardwareSerial LoRaSerial(1);
+Adafruit_SHT4x sht4;
+Adafruit_INA219 ina219;
+
+// Function prototypes
+void beginI2C();
+void beginSensors();
+NodeData getNodeData();
 
 void setup()
 {
@@ -22,10 +38,14 @@ void setup()
     Serial.println(F("Initialize System"));
 
     // Init LoRa Serial
-    LoRaSerial.begin(115200, SERIAL_8N1, 16, 17); // RX en pin 16, TX en pin 17
+    LoRaSerial.begin(115200, SERIAL_8N1, 16, 17);
     Serial.println(F("LoRa Serial initialized"));
 
-    // Init ESP32 as Access Point (AP mode) without password
+    // Set up sensors
+    beginI2C();
+    beginSensors();
+
+    // Init ESP32 as Access Point
     Serial.println("Setting up Access Point...");
     WiFi.softAP(ssid);
 
@@ -52,7 +72,7 @@ void loop()
                 Serial.println(request);
                 handleRequest(request, client);
             }
-            webpage(client); // Return webpage with updated messages
+            webpage(client);
             break;
         }
         client.stop();
@@ -64,32 +84,36 @@ void loop()
         String loRaMessage = LoRaSerial.readString();
         Serial.print("Received from LoRa: ");
         Serial.println(loRaMessage);
-
-        // Actualizar la variable de mensajes con lo que recibe de LoRa
         receivedMessages += "<p><b>Received:</b> " + loRaMessage + "</p>";
     }
 }
 
-String urlDecode(String input) {
+String urlDecode(String input)
+{
     String decoded = "";
     char temp[] = "00";
     unsigned int len = input.length();
     unsigned int i = 0;
 
-    while (i < len) {
-        if (input[i] == '%') {
-            if (i + 2 < len) {
+    while (i < len)
+    {
+        if (input[i] == '%')
+        {
+            if (i + 2 < len)
+            {
                 temp[0] = input[i + 1];
                 temp[1] = input[i + 2];
-                decoded += (char) strtol(temp, NULL, 16);
+                decoded += (char)strtol(temp, NULL, 16);
                 i += 3;
             }
         }
-        else if (input[i] == '+') {
+        else if (input[i] == '+')
+        {
             decoded += ' ';
             i++;
         }
-        else {
+        else
+        {
             decoded += input[i];
             i++;
         }
@@ -97,10 +121,60 @@ String urlDecode(String input) {
     return decoded;
 }
 
+void beginI2C()
+{
+    Wire.begin();
+    Wire.beginTransmission(0x15);
+    int endValue = Wire.endTransmission();
+    if (endValue == 2)
+        Serial.println("Success: I2C Bus OK");
+    else
+        Serial.println("Error: I2C Bus Not Responding");
+}
+
+void beginSensors()
+{
+    Serial.println("Adafruit SHT4x test");
+    if (!sht4.begin())
+    {
+        Serial.println("Couldn't find SHT4x");
+        while (1)
+            delay(1);
+    }
+    Serial.println("Found SHT4x sensor");
+    Serial.print("Serial number 0x");
+    Serial.println(sht4.readSerial(), HEX);
+    sht4.setPrecision(SHT4X_HIGH_PRECISION);
+    sht4.setHeater(SHT4X_NO_HEATER);
+
+    if (!ina219.begin())
+    {
+        Serial.println("Failed to find INA219 chip");
+        while (1)
+        {
+            delay(10);
+        }
+    }
+}
+
+NodeData getNodeData()
+{
+    NodeData nodeData;
+    float busvoltage = ina219.getBusVoltage_V();
+    float current = ina219.getCurrent_mA();
+    nodeData.current_mA = (current < 0) ? -current : current;
+    float power_mW = ina219.getPower_mW();
+
+    sensors_event_t humidity, temp;
+    sht4.getEvent(&humidity, &temp);
+    nodeData.temperature = temp.temperature;
+    nodeData.humidity = humidity.relative_humidity;
+
+    return nodeData;
+}
 
 void handleRequest(String request, WiFiClient client)
 {
-    // Handle web client request
     if (request.indexOf("/dig0on") > 0)
     {
         digitalWrite(LED, HIGH);
@@ -110,77 +184,59 @@ void handleRequest(String request, WiFiClient client)
         digitalWrite(LED, LOW);
     }
 
-    // Handle LoRa command sent from webpage
     if (request.indexOf("/send?msg=") > 0)
     {
-        // Extraer el mensaje desde el parámetro 'msg=' y decodificar
         String encodedMsg = request.substring(request.indexOf("msg=") + 4);
-        String decodedMsg = urlDecode(encodedMsg); // Decodificar el mensaje
-
-        // Split para obtener solo el primer comando
+        String decodedMsg = urlDecode(encodedMsg);
         int spaceIndex = decodedMsg.indexOf(' ');
         String command = (spaceIndex == -1) ? decodedMsg : decodedMsg.substring(0, spaceIndex);
-
-        // Enviar solo el comando al LoRa
         LoRaSerial.println(command);
-
-        // Actualizar la variable de mensajes con el comando enviado
         receivedMessages += "<p><b>Sent:</b> " + command + "</p>";
-
-        // Confirmar que el comando fue enviado
-        client.println("<p>Command sent to LoRa: " + command + "</p>");
     }
 }
 
 void webpage(WiFiClient client)
 {
-    // Send redesigned webpage to client
+    NodeData nodeData = getNodeData();
+
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: text/html");
     client.println("");
     client.println("<!DOCTYPE HTML>");
     client.println("<html>");
     client.println("<head>");
-    client.println("<title>ESP32 Web Controller</title>");
-
-    // Meta tag for mobile devices
+    client.println("<title>Hardware testing</title>");
     client.println("<meta name='viewport' content='width=device-width, initial-scale=1.0'>");
-
-    // CSS for styling the webpage
     client.println("<style>");
     client.println("body { background-color: #f4f4f4; font-family: Arial, sans-serif; color: #333; text-align: center; }");
-    client.println("h1 { color: #2E8B57; }");
-    client.println(".button { display: inline-block; padding: 15px 30px; font-size: 24px; margin: 10px; cursor: pointer; color: white; background-color: #008CBA; border: none; border-radius: 10px; }");
+    client.println(".button { display: inline-block; padding: 15px 30px; font-size: 12px; margin: 10px; cursor: pointer; color: white; background-color: #008CBA; border: none; border-radius: 10px; }");
     client.println(".button:hover { background-color: #005f73; }");
-    client.println(".send-box { padding: 10px; font-size: 18px; width: 80%; margin: 20px auto; border-radius: 10px; border: 1px solid #333; }");
-    client.println(".send-btn { padding: 10px 20px; font-size: 18px; cursor: pointer; background-color: #3AAA35; color: white; border: none; border-radius: 10px; }");
-    client.println(".message-box { padding: 20px; font-size: 18px; width: 80%; margin: 20px auto; background-color: #fff; border-radius: 10px; border: 1px solid #333; }");
+    client.println(".send-box { padding: 10px; font-size: 12px; width: 80%; margin: 20px auto; border-radius: 10px; border: 1px solid #333; }");
+    client.println(".send-btn { padding: 10px 20px; font-size: 12px; cursor: pointer; background-color: #3AAA35; color: white; border: none; border-radius: 10px; }");
+    client.println(".message-box { padding: 20px; font-size: 12px; width: 80%; margin: 20px auto; background-color: #fff; border-radius: 10px; border: 1px solid #333; }");
     client.println("</style>");
-
     client.println("</head>");
     client.println("<body>");
-    client.println("<h1>ESP32 Web Controller - " + nom + "</h1>");
+    client.println("<h1>Hardware testing</h1>");
     client.println("<hr/>");
 
-    // Digital Outputs Section
-    client.println("<h2>Control LED</h2>");
-    client.println("<a href='/dig0on'><button class='button'>Turn On LED</button></a>");
-    client.println("<a href='/dig0off'><button class='button'>Turn Off LED</button></a>");
-    client.println("<hr/>");
+    client.println("<h2>Sensor Readings</h2>");
+    client.println("<p><b>Temperature:</b> " + String(nodeData.temperature) + " &deg;C</p>");
+    client.println("<p><b>Humidity:</b> " + String(nodeData.humidity) + " %</p>");
+    client.println("<p><b>Current:</b> " + String(nodeData.current_mA) + " mA</p>");
 
-    // LoRa Command Section
     client.println("<h2>Send Command to LoRa</h2>");
     client.println("<form action='/send'>");
     client.println("<input type='text' name='msg' class='send-box' placeholder='Type your command here...'>");
     client.println("<input type='submit' value='Send' class='send-btn'>");
     client.println("</form>");
-    client.println("<hr/>");
-
-    // LoRa Messages Section
-    client.println("<h2>Received Messages</h2>");
     client.println("<div class='message-box'>");
-    client.println(receivedMessages); // Mostrar los mensajes enviados/recibidos
+    client.println(receivedMessages);
     client.println("</div>");
+
+    client.println("<h2>Control LED</h2>");
+    client.println("<a href='/dig0on'><button class='button'>ON</button></a>");
+    client.println("<a href='/dig0off'><button class='button'>OFF</button></a>");
 
     client.println("</body>");
     client.println("</html>");

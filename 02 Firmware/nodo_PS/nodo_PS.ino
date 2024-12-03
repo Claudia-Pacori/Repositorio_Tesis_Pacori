@@ -1,15 +1,20 @@
 #include <WiFi.h>
+#define LED 18
 
 // LoRa stuff
 HardwareSerial LoRaSerial(2); // TX on 17, RX on 16
-void sendParameter(int SF, int CR, int TP);
+void setParameter(int SF, int CR, int TP);
+
+float soloCorriente();
+float sendLoRa2(String comando, bool mostrar);
 
 // Constants
-const char *ssid = "ESP32_wifi";
+const char *ssid = "ESP32_node1";
 WiFiServer server(80);
 
 // Parameters and flags
 int TPmin, TPmax, SFmin, SFmax, CRmin, CRmax;
+int TPeval, SFeval, CReval;
 String evaluationTime;
 bool evaluating = false;
 
@@ -66,14 +71,18 @@ void performEvaluation(WiFiClient client)
 {
     if (waitForConfirmation())
     {
-        evaluationPage(client);
-        delay(100);
         Serial.println("Confirmation received. Starting evaluation...");
-        client.println("<p>Evaluation started. Sending initial packets...</p>");
+        evaluationPage(client);
 
-        // sendParameter(SFmax, CRmax, TPmax);
-        sendMessage("SF: " + String(9) + ", CR: " + String(4) + ", TP: " + String(22));
-        sendParameter(9, 4, 22);
+        TPeval = TPmin;
+        SFeval = SFmax;
+        CReval = CRmin;
+
+        safeConfig();
+        sendMessage("PARAMS|SF" + String(SFeval) + "|CR" + String(CReval) + "|TP" + String(TPeval));
+        sendMessage("PARAMS|SF" + String(SFeval) + "|CR" + String(CReval) + "|TP" + String(TPeval));
+        sendMessage("PARAMS|SF" + String(SFeval) + "|CR" + String(CReval) + "|TP" + String(TPeval));
+        setParameter(SFeval, CReval, TPeval);
         send20Packets(client);
 
         unsigned long startTime = millis();
@@ -81,26 +90,41 @@ void performEvaluation(WiFiClient client)
         {
             if (LoRaSerial.available())
             {
-                String response = LoRaSerial.readStringUntil('\n');
-                if (response.indexOf("PARAMS:") != -1)
+                String response = LoRaSerial.readString();
+                if (response.indexOf("CONFIRM|") != -1)
                 {
                     // MANEJAR PARAMETROS DE INGRESO
-                    sendMessage("SF: " + String(9) + ", CR: " + String(4) + ", TP: " + String(22));
-                    sendParameter(9, 4, 22);
+                    Serial.println("Recibi: " + response);
+                    String params = response.substring(response.indexOf("CONFIRM|") + 8);
+                    int tpIndex = params.indexOf("TP");
+                    int sfIndex = params.indexOf("|SF");
+                    int crIndex = params.indexOf("|CR");
+
+                    TPeval = params.substring(tpIndex + 2, sfIndex).toInt();
+                    SFeval = params.substring(sfIndex + 3, crIndex).toInt();
+                    CReval = params.substring(crIndex + 3).toInt();
+                    safeConfig();
+                    sendMessage("PARAMS|SF" + String(SFeval) + "|CR" + String(CReval) + "|TP" + String(TPeval));
+                    sendMessage("PARAMS|SF" + String(SFeval) + "|CR" + String(CReval) + "|TP" + String(TPeval));
+                    sendMessage("PARAMS|SF" + String(SFeval) + "|CR" + String(CReval) + "|TP" + String(TPeval));
+                    setParameter(SFeval, CReval, TPeval);
                     send20Packets(client);
                 }
             }
         }
         safeConfig();
+        delay(150);
         sendMessage("FIN");
-        client.println("<p>Evaluation finished.</p>");
+        sendMessage("FIN");
+        sendMessage("FIN");
+        resultsPage(client);
         evaluating = false;
     }
     else
     {
         Serial.println("No confirmation received.");
-        configurePage(client, "alert('Error: Confirmation not received.');");
         evaluating = false;
+        configurePage(client, "alert('Error: Confirmation not received.');");
     }
 }
 
@@ -119,13 +143,37 @@ unsigned long convertTimeToMillis(String time)
 
 void send20Packets(WiFiClient client)
 {
+    float totalCurrent = 0.0;
+    float totalTemperature = 0.0;
+    float totalHumidity = 0.0;
+
     for (int i = 0; i < 20; i++)
     {
-        delay(100);
-        sendMessage("**************************************************"); // Send dummy data of 50 bytes
-        client.println("<p>Packet " + String(i + 1) + " sent.</p>");
+        digitalWrite(LED, HIGH);
+        delay(150);
+        digitalWrite(LED, LOW);
+        totalCurrent += sendLoRa2("AT+SEND=2,50,**************************************************", true); // Send dummy data of 50 bytes
+        NodeData nodeData = getNodeData(); // Get current, temperature, and humidity data
+        totalTemperature += nodeData.temperature;
+        totalHumidity += nodeData.humidity;        
+        Serial.print(".");
+        // client.println("<p>Packet " + String(i + 1) + " sent.</p>");
     }
+
+    float avgCurrent = totalCurrent / 20;
+    float avgTemperature = totalTemperature / 20;
+    float avgHumidity = totalHumidity / 20;
+
+    delay(150);
+    sendMessage("FINPAQUETES" + String(avgCurrent));
+    sendMessage("FINPAQUETES" + String(avgCurrent));
+    sendMessage("FINPAQUETES" + String(avgCurrent));
+    safeConfig();
+
+    Serial.println("\nAverage: Current = " + String(avgCurrent) + " mA, Temperature = " +
+                   String(avgTemperature) + " °C, Humidity = " + String(avgHumidity) + " % rH");
 }
+
 
 void processRequest(String request, WiFiClient client)
 {
@@ -159,7 +207,10 @@ void processRequest(String request, WiFiClient client)
 
             evaluating = true;
             safeConfig();
-            sendMessage("START");
+            String startMessage = "START," + String(TPmin) + "-" + String(TPmax) + "," + String(SFmin) + "-" + String(SFmax) + "," + String(CRmin) + "-" + String(CRmax);
+            sendMessage(startMessage);
+            sendMessage(startMessage);
+            sendMessage(startMessage);
         }
         else
         {

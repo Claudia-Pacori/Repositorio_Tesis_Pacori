@@ -44,6 +44,11 @@ void beginSensors()
 }
 
 // Function to read current
+float soloCorriente()
+{
+    return ina219.getCurrent_mA();
+}
+
 NodeData readCurrent() 
 {
     NodeData nodeData; // Create an instance of NodeData
@@ -54,15 +59,6 @@ NodeData readCurrent()
     nodeData.current_mA = (current < 0) ? -current : current;    
     float power_mW = ina219.getPower_mW();
 
-    /*
-    Serial.print("\nVoltage: ");
-    Serial.print(busvoltage);
-    Serial.print("V, Current: ");
-    Serial.print(nodeData.current_mA);
-    Serial.print("mA, Power: ");
-    Serial.print(power_mW);
-    Serial.println("mW");
-    */
     return nodeData;
 }
 
@@ -71,14 +67,7 @@ NodeData readTH(NodeData nodeData)
 {
     sensors_event_t humidity, temp;
     sht4.getEvent(&humidity, &temp);
-    /*
-    Serial.print("\n\nTemperature: ");
-    Serial.print(temp.temperature);
-    Serial.println(" degrees C");
-    Serial.print("Humidity: ");
-    Serial.print(humidity.relative_humidity);
-    Serial.println("% rH");
-    */
+
     nodeData.temperature = temp.temperature; // Store temperature in the struct
     nodeData.humidity = humidity.relative_humidity; // Store humidity in the struct
     return nodeData;
